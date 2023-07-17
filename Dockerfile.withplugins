@@ -1,31 +1,39 @@
+# Support setting various labels on the final image
+ARG COMMIT=""
+ARG VERSION=""
+ARG BUILDNUM=""
+
 # Build Geth in a stock Go builder container
 FROM golang:1.20-alpine as builder
 
 RUN apk add --no-cache gcc musl-dev linux-headers git
 
-ADD . /plugeth
-RUN cd /plugeth && go run build/ci.go install ./cmd/geth
-
 # Get dependencies - will also be cached if we won't change go.mod/go.sum
+COPY go.mod /go-ethereum/
+COPY go.sum /go-ethereum/
+RUN cd /go-ethereum && go mod download
+
+ADD . /go-ethereum
+RUN cd /go-ethereum && go run build/ci.go install ./cmd/geth
+
 RUN mkdir -p /openrelayxyz && cd /openrelayxyz && git clone https://github.com/openrelayxyz/plugeth-plugins.git
-RUN cd /openrelayxyz/plugeth-plugins/packages/blockupdates && git checkout v0.0.25 && go build -tags=urfave_cli_no_docs -buildmode=plugin -trimpath
+RUN cd /openrelayxyz/plugeth-plugins/packages/blockupdates && git checkout v1.1.1-rc4 && go build -tags=urfave_cli_no_docs -buildmode=plugin -trimpath
 
 RUN cd /openrelayxyz && git clone https://github.com/openrelayxyz/cardinal-evm.git
-RUN cd /openrelayxyz/cardinal-evm/plugins/merge && git checkout v1.4.0 && go build -tags=urfave_cli_no_docs -buildmode=plugin -trimpath
-RUN cd /openrelayxyz/cardinal-evm/plugins/producer && git checkout v1.4.0 && go build -tags=urfave_cli_no_docs -buildmode=plugin -trimpath
+RUN cd /openrelayxyz/cardinal-evm/plugins/merge && git checkout v1.6.0rc3 && go build -tags=urfave_cli_no_docs -buildmode=plugin -trimpath
+RUN cd /openrelayxyz/cardinal-evm/plugins/producer && git checkout v1.6.0rc3 && go build -tags=urfave_cli_no_docs -buildmode=plugin -trimpath
 
+# Pull Geth into a second stage deploy alpine container
 FROM alpine:latest
 
 RUN apk add --no-cache ca-certificates
-COPY --from=builder /plugeth/build/bin/geth /usr/bin/
+COPY --from=builder /go-ethereum/build/bin/geth /usr/local/bin/
 RUN cd /root && mkdir -p /.ethereum/plugins/
 COPY --from=builder /openrelayxyz/plugeth-plugins/packages/blockupdates/blockupdates.so /root/.ethereum/plugins/
 COPY --from=builder /openrelayxyz/cardinal-evm/plugins/merge/merge.so /root/.ethereum/plugins/
 COPY --from=builder /openrelayxyz/cardinal-evm/plugins/producer/producer.so /root/.ethereum/plugins/
 
-ENV SHELL /bin/bash
-EXPOSE 8545 8546 8547 30303 30303/udp
-
+EXPOSE 8545 8546 30303 30303/udp
 ENTRYPOINT ["geth"]
 
 # Add some metadata labels to help programatic image consumption
